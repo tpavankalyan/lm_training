@@ -105,9 +105,9 @@ def main():
     dataset_name    = config['data']['dataset_name']
     split           = config['data'].get('split', 'train')
     streaming       = config['data'].get('streaming', False)
-    max_length      = config['training'].get('max_length', 2048)
-    append_eos      = config['training'].get('append_eos', True)
-    context_packing = config['training'].get('context_packing', False)
+    max_length      = config['data'].get('max_length', 2048)
+    append_eos      = config['data'].get('append_eos', True)
+    context_packing = config['data'].get('context_packing', False)
     processed_path  = config['data'].get('processed_path', None)
     # Training related parameters
     pretraining_from_scratch = config['training'].get('pretrain_from_scratch', False)
@@ -184,6 +184,21 @@ def main():
     print(f"  - Total tokens: {total_tokens:,}")
     print(f"  - Average tokens per example: {total_tokens / len(ds):.1f}")
     print(f"  - Max sequence length: {max_length}")
+    
+    # Verify if the data is tokenized correctly
+    if 'input_ids' not in ds.features:
+        raise ValueError("Dataset does not contain 'input_ids'. Ensure the dataset is tokenized correctly.")
+    if 'attention_mask' not in ds.features:
+        raise ValueError("Dataset does not contain 'attention_mask'. Ensure the dataset is padded correctly.")
+    if len(ds) == 0:
+        raise ValueError("Dataset is empty. Check the tokenization and padding steps.")
+    if len(ds[0]['input_ids']) != max_length:
+        raise ValueError(f"Input IDs length mismatch: expected {max_length}, got {len(ds[0]['input_ids'])}")
+    if len(ds[0]['attention_mask']) != max_length:
+        raise ValueError(f"Attention mask length mismatch: expected {max_length}, got {len(ds[0]['attention_mask'])}")
+    
+    #print dataset example
+    print(f"Example from dataset: {ds[0]}")
     
     num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
     dataset_size = len(ds)
