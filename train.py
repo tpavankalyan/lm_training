@@ -9,50 +9,76 @@ from transformers import (
     DataCollatorForLanguageModeling,
     AutoConfig
 )
-from transformers.optimization import Adafactor, AdafactorSchedule
 from datasets import load_dataset, Dataset, load_from_disk
-import wandb
-from tqdm import tqdm
 import numpy as np
 import math
+import argparse
+import random
+from torch.optim import AdamW
+from transformers import get_scheduler
 
+def set_seed(seed):
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True  # slows down but more reproducible
+    torch.backends.cudnn.benchmark = False
 
 def load_config(path):
     with open(path, 'r') as f:
         return yaml.safe_load(f)
 
+def tokenize_and_count(batch, tokenizer, max_length, append_eos=True):
+    texts = batch['text']
+    if append_eos:
+        texts = [text + f" {tokenizer.eos_token}\n" for text in texts]
+    out = tokenizer(
+        texts,
+        truncation=True,
+        max_length=max_length,
+        padding=False
+    )
+    out['num_tokens'] = [len(ids) for ids in out['input_ids']]
+    return out
 
-def get_model_name(size, override=None):
-    if override:
-        return override
-    if size == '135M':
-        return 'HuggingFaceTB/SmolLM2-135M'
-    elif size == '360M':
-        return 'HuggingFaceTB/SmolLM2-360M'
-    else:
-        raise ValueError(f"Unknown model size: {size}")
+def context_pack(ds, tokenizer, max_length):
+    all_input_ids = np.concatenate([ex['input_ids'] for ex in ds]).astype(np.int32)
+    n_chunks = math.ceil(len(all_input_ids) / max_length)
+    total_needed = n_chunks * max_length
+    if len(all_input_ids) < total_needed:
+        all_input_ids = np.pad(
+            all_input_ids,
+            (0, total_needed - len(all_input_ids)),
+            constant_values=tokenizer.pad_token_id
+        )
+    all_input_ids = all_input_ids.reshape((n_chunks, max_length))
+    attention_mask = (all_input_ids != tokenizer.pad_token_id).astype(np.int32)
+    ds = Dataset.from_dict({
+        'input_ids': all_input_ids.tolist(),
+        'attention_mask': attention_mask.tolist()
+    })
+    return ds
 
-
-def count_tokens(dataset):
-    """Count total tokens in dataset"""
-    total_tokens = 0
-    for example in tqdm(dataset, desc="Counting tokens"):
-        total_tokens += len(example['input_ids'])
-    return total_tokens
-
+def pad_dataset(ds, tokenizer, max_length):
+    def pad_fn(batch):
+        return tokenizer.pad(
+            {'input_ids': batch['input_ids']},
+            padding='max_length',
+            max_length=max_length
+        )
+    ds = ds.map(pad_fn, batched=True, num_proc=os.cpu_count(), desc="Padding dataset")
+    return ds
 
 def initialize_model_weights(model, init_method='xavier_uniform'):
-    """Proper weight initialization for training stability"""
     for name, param in model.named_parameters():
-        if param.dim() > 1:  # Weight matrices
+        if param.dim() > 1:
             if 'embed' in name.lower():
-                # Embedding layers - smaller initialization
                 torch.nn.init.normal_(param, mean=0.0, std=0.02)
             elif 'lm_head' in name.lower() or 'output' in name.lower():
-                # Output layer - very small initialization
                 torch.nn.init.normal_(param, mean=0.0, std=0.02)
             else:
-                # Hidden layers
                 if init_method == 'xavier_uniform':
                     torch.nn.init.xavier_uniform_(param)
                 elif init_method == 'xavier_normal':
@@ -61,251 +87,185 @@ def initialize_model_weights(model, init_method='xavier_uniform'):
                     torch.nn.init.kaiming_uniform_(param, a=math.sqrt(5))
                 elif init_method == 'kaiming_normal':
                     torch.nn.init.kaiming_normal_(param, mode='fan_in', nonlinearity='relu')
-        else:  # Bias terms
+        else:
             torch.nn.init.zeros_(param)
-    
     print(f"Initialized model weights with {init_method}")
 
 
 def main():
-    import argparse
-
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='config.yaml')
     args = parser.parse_args()
-
     config = load_config(args.config)
-    model_name = get_model_name(config['model_size'], config.get('model_name'))
-    run_name = config.get('run_name', f"{model_name}-{config['model_size']}")
-    run_dir = config.get('run_dir', './outputs/')
+    model_name      = config.get('model_name')
+    run_name        = config.get('run_name')
+    run_dir         = config.get('run_dir')
+    seed            = config.get('seed', 42)
+    # Data related parameters
+    dataset_name    = config['data']['dataset_name']
+    split           = config['data'].get('split', 'train')
+    streaming       = config['data'].get('streaming', False)
+    max_length      = config['training'].get('max_length', 2048)
+    append_eos      = config['training'].get('append_eos', True)
+    context_packing = config['training'].get('context_packing', False)
+    processed_path  = config['data'].get('processed_path', None)
+    # Training related parameters
+    pretraining_from_scratch = config['training'].get('pretrain_from_scratch', False)
+    init_method = config['training'].get('init_method', 'xavier_uniform')
+    lr = float(config['training'].get('lr', 3e-4))
+    weight_decay = float(config['training'].get('weight_decay', 0.01))
+    eps = float(config['training'].get('eps', 1e-8))
+    beta1 = float(config['training'].get('beta1', 0.9))
+    beta2 = float(config['training'].get('beta2', 0.98))
+    batch_size = config['training'].get('batch_size', 8)
+    gas = config['training'].get('gradient_accumulation_steps', 1)
+    epochs = config['training'].get('epochs', 1)
+    bf16 = config['training'].get('bf16', False)
+    fp16 = config['training'].get('fp16', True)
+    ddp_find_unused_parameters = config['training'].get('ddp_find_unused_parameters', False)
+    max_grad_norm = config['training'].get('max_grad_norm', 1.0)
+    dataloader_drop_last = config['training'].get('dataloader_drop_last', True)
+    # Lr scheduler related parameters
+    scheduler_name = config['scheduler'].get('name', 'linear')
+    warmup_ratio = config['scheduler'].get('warmup_ratio', 0.1)
+    num_cycles = config['scheduler'].get('num_cycles', 0.5)
+    decay_ratio = config['scheduler'].get('decay_ratio', 0.1)
+    warmup_type = config['scheduler'].get('warmup_type', 'linear')
+    decay_type = config['scheduler'].get('decay_type', 'linear')
+    min_lr_ratio = config['scheduler'].get('min_lr_ratio', 0.1)
+    # logging and other parameters
+    overwrite_output_dir = config['logging'].get('overwrite_output_dir', True)
+    save_steps_ratio = config['logging'].get('save_steps_ratio', 0.1)
+    save_total_limit = config['logging'].get('save_total_limit', 2)
+    logging_steps = config['logging'].get('logging_steps', 1)
+    report_to = config['logging'].get('report_to', 'wandb')
+    save_strategy = config['logging'].get('save_strategy', 'epoch')
+    logging_strategy = config['logging'].get('logging_strategy', 'steps')
 
-    # Initialize wandb only on main process to avoid multiple logging
-    if config.get('wandb', {}).get('enabled', False) and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0):
-        wandb.init(
-            project=config['wandb'].get('project', 'llm-training'),
-            name=run_name,
-            config=config
-        )
+    set_seed(seed)
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-        
-    if not config['data']['tokenize']:
-        ds = load_from_disk(config['data'].get('tokenized_path'))
+
+    if processed_path:
+        print(f"Loading preprocessed dataset from {processed_path}")
+        ds = load_from_disk(processed_path)
+        total_tokens = sum(len(ids) for ids in ds['input_ids'])
     else:
-        # Load dataset
-        ds = load_dataset(
-            config['data']['dataset_name'],
-            config['data'].get('dataset_config_name', None),
-            split=config['data'].get('split', 'train'),
-            streaming=config['data'].get('streaming', False)
-        )
+        ds = load_dataset(dataset_name, split=split, streaming=streaming)
 
         print(f"Dataset loaded: {len(ds)} examples")
 
-        # Apply chat template if needed
-        chat_template = config['data'].get('chat_template')
-        if chat_template:
-            with open(chat_template, 'r') as f:
-                template_str = f.read()
-            ds = ds.map(
-                lambda x: {'text': template_str.replace('{text}', x['text'])},
-                num_proc = os.cpu_count()
-                )
-
-        # Tokenize
-        def tokenize_and_count(batch):
-            texts = batch['text']
-            if config['training'].get('append_eos', True):
-                texts = [text + tokenizer.eos_token for text in texts]
-            
-            tokenized = tokenizer(
-                texts,
-                truncation=True,
-                max_length=config['training'].get('max_length', 2048),
-                padding=False
-            )
-            tokenized['num_tokens'] = [len(ids) for ids in tokenized['input_ids']]
-            return tokenized
-
-
         ds = ds.map(
-            tokenize_and_count,
+            lambda batch: tokenize_and_count(batch, tokenizer, max_length, append_eos),
             batched=True,
             remove_columns=ds.column_names,
             num_proc=os.cpu_count(),
             desc="Tokenizing dataset"
         )
         
-        # Store token counts before removing the column
+        total_tokens = sum(ds['num_tokens']) if 'num_tokens' in ds.features else sum(len(ids) for ids in ds['input_ids'])
         if 'num_tokens' in ds.features:
-            total_tokens = sum(ds['num_tokens'])
-        else:
-            total_tokens = sum(len(ids) for ids in ds['input_ids'])
-            
-        if 'num_tokens' in ds.features:
-                ds = ds.remove_columns(['num_tokens'])
-
-        if config['training'].get('context_packing', False):
-            if config['data'].get('streaming', False):
-                raise ValueError("Context packing with streaming datasets is unsupported.")
-
-            all_input_ids = np.concatenate([example['input_ids'] for example in ds]).astype(np.int32)
-            max_length = config['training'].get('max_length', 2048)
-            n_chunks = math.ceil(len(all_input_ids) / max_length)
-
-            total_needed = n_chunks * max_length
-            if len(all_input_ids) < total_needed:
-                all_input_ids = np.pad(
-                    all_input_ids,
-                    (0, total_needed - len(all_input_ids)),
-                    constant_values=tokenizer.pad_token_id
-                )
-
-            all_input_ids = all_input_ids.reshape((n_chunks, max_length))
-            attention_mask = (all_input_ids != tokenizer.pad_token_id).astype(np.int32)
-
-            ds = Dataset.from_dict({
-                'input_ids': all_input_ids.tolist(),
-                'attention_mask': attention_mask.tolist()
-            })
-        else:
-
-            # Pad to max length
-            def pad_fn(batch):
-                return tokenizer.pad(
-                    {'input_ids': batch['input_ids']},  # only pad input_ids
-                    padding='max_length',
-                    max_length=config['training'].get('max_length', 2048)
-                )
-            ds = ds.map(pad_fn, batched=True, num_proc=os.cpu_count(), desc="Padding dataset")
-        
-        # save tokenized dataset
-        ds.save_to_disk(os.path.join(run_dir, "tokenized_datasets", run_name))
-    # Calculate total tokens - handle both cases (with/without num_tokens column)
-    if not config['data']['tokenize']:
-        # Loading pre-tokenized dataset
-        if 'num_tokens' in ds.features:
-            total_tokens = sum(ds['num_tokens'])
-            # Remove num_tokens column to avoid data collator issues
             ds = ds.remove_columns(['num_tokens'])
+            
+        if context_packing:
+            if streaming:
+                raise ValueError("Context packing with streaming datasets is unsupported.")
+            ds = context_pack(ds, tokenizer, max_length)
         else:
-            total_tokens = sum(len(ids) for ids in ds['input_ids'])
+            ds = pad_dataset(ds, tokenizer, max_length)
+
+        ds.save_to_disk(os.path.join(run_dir, "tokenized_datasets", run_name))
 
     # Print dataset statistics
     print(f"Dataset statistics:")
     print(f"  - Number of examples: {len(ds)}")
     print(f"  - Total tokens: {total_tokens:,}")
     print(f"  - Average tokens per example: {total_tokens / len(ds):.1f}")
-    print(f"  - Max sequence length: {config['training'].get('max_length', 2048)}")
+    print(f"  - Max sequence length: {max_length}")
     
-    if config.get('wandb', {}).get('enabled', False) and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0):
-        wandb.log({
-            "dataset/examples": len(ds),
-            "dataset/total_tokens": total_tokens,
-            "dataset/avg_tokens_per_example": total_tokens / len(ds),
-            "dataset/max_sequence_length": config['training'].get('max_length', 2048)
-        })
-
+    num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
+    dataset_size = len(ds)
+    steps_per_epoch = dataset_size // (batch_size * gas * num_gpus)
+    num_training_steps = steps_per_epoch * epochs
+    
+    print(f"Training configuration:")
+    print(f"Number of GPUs: {num_gpus}")
+    print(f"Dataset size: {dataset_size}")
+    print(f"Steps per epoch: {steps_per_epoch}")
+    print(f"Total training steps: {num_training_steps}")
+    
     # Data collator
     data_collator = DataCollatorForLanguageModeling(
         tokenizer=tokenizer,
         mlm=False
     )
 
-    # Model
-    # pretrain model from scratch
-    if config['training'].get('pretrain_from_scratch', False):
+    if pretraining_from_scratch:
         model = AutoModelForCausalLM.from_config(AutoConfig.from_pretrained(model_name))
-        # Better initialization
-        init_method = config['training'].get('init_method', 'xavier_uniform')
         initialize_model_weights(model, init_method)
     else:
         model = AutoModelForCausalLM.from_pretrained(model_name)
-    
-    # Optimizer with more conservative settings
-    optimizer_name = config['training'].get('optimizer', 'adafactor').lower()
-    if optimizer_name == 'adamw':
-        from torch.optim import AdamW
-        optimizer = AdamW(
-            model.parameters(),
-            lr=float(config['training'].get('learning_rate', 1e-5)),  # Lower default LR
-            weight_decay=float(config['training'].get('weight_decay', 0.01)),
-            eps=1e-8,  # More stable epsilon
-            betas=(0.9, 0.95)
+        
+    optimizer = AdamW(
+        model.parameters(),
+        lr=lr,
+        weight_decay=weight_decay,
+        eps=eps,
+        betas=(beta1, beta2)
         )
-    elif optimizer_name == 'adafactor':
-        optimizer = Adafactor(
-            model.parameters(),
-            scale_parameter=True,
-            relative_step=True,
-            warmup_init=True,
-            lr=None,
-            eps=(1e-30, 1e-3),
-            clip_threshold=1.0,
-            decay_rate=-0.8,
-            weight_decay=0.0,
-            beta1=None
-        )
-    else:
-        raise ValueError(f"Unknown optimizer: {optimizer_name}")
     
-    num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
-    batch_size = config['training']['batch_size']
-    gradient_accumulation_steps = config['training'].get('gradient_accumulation_steps', 1)
-    epochs = config['training']['epochs']
-    dataset_size = len(ds)
+    num_warmup_steps = int(warmup_ratio * num_training_steps)
+    num_decay_steps = int((1 - decay_ratio) * num_training_steps)
+    num_stable_steps = num_training_steps - num_warmup_steps - num_decay_steps
+    
+    lr_config = {}
+    if scheduler_name == "linear":
+        lr_config = {"num_warmup_steps": num_warmup_steps, "num_training_steps": num_training_steps}
+    elif scheduler_name == "cosine":
+        lr_config = {"num_warmup_steps": num_warmup_steps, "num_training_steps": num_training_steps, "num_cycles": num_cycles}
+    elif scheduler_name == "constant_with_warmup":
+        lr_config = {"num_warmup_steps": num_warmup_steps, "num_training_steps": num_training_steps}
+    elif scheduler_name == "warmup_stable_decay":
+        lr_config = {
+            "num_warmup_steps": num_warmup_steps,
+            "num_training_steps": num_training_steps,
+            "num_stable_steps": num_stable_steps,
+            "min_lr_ratio": min_lr_ratio,
+            "decay_type": decay_type,
+            "warmup_type": warmup_type,
+            "num_decay_steps": num_decay_steps,
+            "num_cycles": num_cycles
+        }
 
-    steps_per_epoch = dataset_size // (batch_size * gradient_accumulation_steps * num_gpus)
-    num_training_steps = steps_per_epoch * epochs
-
-    scheduler_name = config['training'].get('scheduler', 'linear')
-    print(f"Training steps: {num_training_steps}")
+    lr_scheduler = get_scheduler(
+        name=scheduler_name,
+        optimizer=optimizer,
+        lr_config=lr_config
+    )
     
-    # More conservative warmup
-    warmup_steps = config['training'].get('warmup_steps', num_training_steps // 10)
-    
-    if scheduler_name == "adafactor":
-        lr_scheduler = AdafactorSchedule(optimizer)
-    else:
-        from transformers import get_scheduler
-        lr_scheduler = get_scheduler(
-            name=scheduler_name,
-            optimizer=optimizer,
-            num_warmup_steps=warmup_steps,
-            num_training_steps=num_training_steps
-        )
+    output_dir = run_dir + "/checkpoints/" + run_name
+    save_steps = int(save_steps_ratio * num_training_steps)
     
     # More conservative training args
     training_args = TrainingArguments(
-        output_dir=run_dir + "/checkpoints/" + run_name,
-        overwrite_output_dir=True,
-        num_train_epochs=config['training']['epochs'],
-        per_device_train_batch_size=config['training']['batch_size'],
-        gradient_accumulation_steps=config['training'].get('gradient_accumulation_steps', 1),
-        save_steps=config['training']['save_steps'],
-        save_total_limit=2,
-        fp16=torch.cuda.is_available() and config['training'].get('fp16', True),
-        bf16=torch.cuda.is_available() and config['training'].get('bf16', False),  # More stable than fp16
-        logging_steps=1,
-        report_to='wandb' if config.get('wandb', {}).get('enabled', False) else 'none',
-        remove_unused_columns=False,
-        ddp_find_unused_parameters=False,
-        max_grad_norm=config['training'].get('max_grad_norm', 1.0),
-        # Additional stability settings
-        dataloader_drop_last=True,
-        eval_accumulation_steps=None,
-        warmup_steps=warmup_steps,
-        # More frequent checkpointing for debugging
-        save_strategy="epoch",
-        logging_strategy="steps",
-        # Skip broken examples
-        skip_memory_metrics=True,
-        # More conservative mixed precision
-        fp16_full_eval=False,
-        # Disable some optimizations that can cause instability
-        dataloader_num_workers=0,  # Avoid multiprocessing issues
+        output_dir=output_dir,
+        overwrite_output_dir=overwrite_output_dir,
+        num_train_epochs=epochs,
+        per_device_train_batch_size=batch_size,
+        gradient_accumulation_steps=gas,
+        save_steps=save_steps,
+        save_total_limit=save_total_limit,
+        fp16=fp16,
+        bf16=bf16,
+        logging_steps=logging_steps,
+        report_to=report_to,
+        ddp_find_unused_parameters=ddp_find_unused_parameters,
+        max_grad_norm=max_grad_norm,
+        dataloader_drop_last=dataloader_drop_last,
+        save_strategy=save_strategy,
+        logging_strategy=logging_strategy
     )
     
     trainer = Trainer(
@@ -321,12 +281,8 @@ def main():
     trainer.train()
 
     # Save final model
-    trainer.save_model(run_dir + "/checkpoints/" + run_name)
-    tokenizer.save_pretrained(run_dir + "/checkpoints/" + run_name)
-
-    if config.get('wandb', {}).get('enabled', False) and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0):
-        wandb.finish()
-
+    trainer.save_model(output_dir)
+    tokenizer.save_pretrained(output_dir)
 
 if __name__ == '__main__':
     main()

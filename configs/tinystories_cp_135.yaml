@@ -1,36 +1,50 @@
 # Example config for LLM training
-model_size: 135M  # Options: 135M, 350M
-model_name: null  # Optional: override with a specific HuggingFace model name
-run_name: "tinystories_cp_135_eos_linear"  # Unique run name for this experiment
-run_dir: "./outputs/"
+model_name: HuggingFaceTB/SmolLM2-135M  # Model name or path
+run_name: ""  # Unique run name for this experiment
+run_dir: ""
+seed: 42 
 
 data:
-  dataset_name: roneneldan/TinyStories #wikitext
-  # dataset_config_name: wikitext-2-raw-v1  # Added config name for wikitext
+  processed_path: None
+  dataset_name: roneneldan/TinyStories
   split: train
   streaming: false
-  # chat_template: ./example_chat_template.txt  # Use the example chat template
-  tokenize: false
-  tokenized_path: "./outputs/tokenized_datasets/tinystories_cp_135_eos/"
+  max_length: 512
+  append_eos: true
+  context_packing: true
 
 training:
-  learning_rate: 5e-4  # Much lower than before
-  max_grad_norm: 0.5   # More aggressive gradient clipping
-  scheduler: 'linear'  # More stable than linear for small datasets
-  # warmup_steps: 1000   # Reduced warmup for faster convergence
-  weight_decay: 0.01   # Standard weight decay
-  init_method: 'kaiming_normal'  # Better initialization
-  bf16: true           # More stable than fp16
-  fp16: false          # Disable if using bf16
-  optimizer: 'adamw'   # Often more stable than adafactor for from-scratch training
-  batch_size: 80      # Smaller batch size for stability
-  gradient_accumulation_steps: 8  # Maintain effective batch size
-  epochs: 4            # Reduced epochs for faster convergence
-  save_steps: 200      # More frequent saving
-  context_packing: true  # Enable context packing for better memory efficiency
-  pretrain_from_scratch: true  # Train from scratch
-  max_length: 512
-  append_eos: true  # Append EOS token to each example
-wandb:
-  enabled: true
-  project: "llm-training"
+  pretrain_from_scratch: true
+  init_method: 'kaimimg_normal' #['xavier_uniform', 'kaiming_normal', 'normal']
+  lr: 8e-4
+  weight_decay: 0.01
+  eps: 1e-8
+  beta1: 0.9
+  beta2: 0.98
+  batch_size: 64
+  gradient_accumulation_steps: 4
+  epochs: 3
+  bf16: true
+  fp16: false 
+  ddp_find_unused_parameters: false
+  max_grad_norm: 1.0
+  dataloader_drop_last: true
+  
+scheduler:
+  name: 'linear'
+  warmup_ratio: 0.1
+  num_cycles: 0.5
+  decay_ratio: 0.1
+  warmup_type: 'linear'
+  decay_type: 'linear'
+  min_lr_ratio: 0.1
+
+logging:
+  overwrite_output_dir: true
+  save_steps_ratio: 0.25
+  save_total_limit: 2
+  logging_steps: 1
+  report_to: 'wandb'
+  save_strategy: 'epoch'
+  logging_strategy: 'steps'
+
