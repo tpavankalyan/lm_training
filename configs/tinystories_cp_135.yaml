@@ -1,11 +1,11 @@
 # Example config for LLM training
 model_name: HuggingFaceTB/SmolLM2-135M  # Model name or path
-run_name: ""  # Unique run name for this experiment
-run_dir: ""
+run_name: "tinystories_cp_1"  # Unique run name for this experiment
+run_dir: "/datadrive/pavan/experiments/outputs/"
 seed: 42 
 
 data:
-  processed_path: None
+  # processed_path: "/datadrive/pavan/experiments/data/tinystories_cp_135"
   dataset_name: roneneldan/TinyStories
   split: train
   streaming: false
@@ -15,24 +15,24 @@ data:
 
 training:
   pretrain_from_scratch: true
-  init_method: 'kaimimg_normal' #['xavier_uniform', 'kaiming_normal', 'normal']
-  lr: 8e-4
+  init_method: 'kaiming_normal' #['xavier_uniform', 'kaiming_normal', 'normal']
+  lr: 1e-3
   weight_decay: 0.01
   eps: 1e-8
   beta1: 0.9
   beta2: 0.98
   batch_size: 64
   gradient_accumulation_steps: 4
-  epochs: 3
-  bf16: true
-  fp16: false 
+  epochs: 10
+  bf16: false
+  fp16: true 
   ddp_find_unused_parameters: false
   max_grad_norm: 1.0
   dataloader_drop_last: true
   
 scheduler:
-  name: 'linear'
-  warmup_ratio: 0.1
+  name: 'constant_with_warmup'
+  warmup_ratio: 0.0
   num_cycles: 0.5
   decay_ratio: 0.1
   warmup_type: 'linear'
