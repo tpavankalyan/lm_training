@@ -257,7 +257,7 @@ def main():
     lr_scheduler = get_scheduler(
         name=scheduler_name,
         optimizer=optimizer,
-        lr_config=lr_config
+        **lr_config
     )
     
     output_dir = run_dir + "/checkpoints/" + run_name
