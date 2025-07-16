@@ -5,7 +5,7 @@ run_dir: "/datadrive/pavan/experiments/outputs/"
 seed: 42 
 
 data:
-  # processed_path: "/datadrive/pavan/experiments/data/tinystories_cp_135"
+  processed_path: "/datadrive/pavan/experiments/outputs/tokenized_datasets/tinystories_cp_1"
   dataset_name: roneneldan/TinyStories
   split: train
   streaming: false
@@ -21,11 +21,11 @@ training:
   eps: 1e-8
   beta1: 0.9
   beta2: 0.98
-  batch_size: 64
+  batch_size: 100
   gradient_accumulation_steps: 4
   epochs: 10
-  bf16: false
-  fp16: true 
+  bf16: true
+  fp16: false 
   ddp_find_unused_parameters: false
   max_grad_norm: 1.0
   dataloader_drop_last: true
