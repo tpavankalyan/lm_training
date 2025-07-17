@@ -1,17 +1,17 @@
 # Example config for LLM training
 model_name: HuggingFaceTB/SmolLM2-135M  # Model name or path
-run_name: "tinystories_cp_1"  # Unique run name for this experiment
-run_dir: "/datadrive/pavan/experiments/outputs/"
+run_name: "tinystories_ncp_2"  # Unique run name for this experiment
+run_dir: "/home/aiscuser/experiments/outputs/"
 seed: 42 
 
 data:
-  processed_path: "/datadrive/pavan/experiments/outputs/tokenized_datasets/tinystories_cp_1"
+  processed_path: "/home/aiscuser/experiments/outputs/tokenized_datasets/tinystories_ncp_1/"
   dataset_name: roneneldan/TinyStories
   split: train
   streaming: false
   max_length: 512
   append_eos: true
-  context_packing: true
+  context_packing: false
 
 training:
   pretrain_from_scratch: true
@@ -31,7 +31,7 @@ training:
   dataloader_drop_last: true
   
 scheduler:
-  name: 'constant_with_warmup'
+  name: 'cosine'
   warmup_ratio: 0.0
   num_cycles: 0.5
   decay_ratio: 0.1
@@ -42,7 +42,7 @@ scheduler:
 logging:
   overwrite_output_dir: true
   save_steps_ratio: 0.25
-  save_total_limit: 2
+  save_total_limit: 5
   logging_steps: 1
   report_to: 'wandb'
   save_strategy: 'epoch'
