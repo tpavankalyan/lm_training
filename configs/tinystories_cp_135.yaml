@@ -1,6 +1,6 @@
 # Example config for LLM training
 model_name: HuggingFaceTB/SmolLM2-135M  # Model name or path
-run_name: "tinystories_ncp_2"  # Unique run name for this experiment
+run_name: "tinystories_ncp_3"  # Unique run name for this experiment
 run_dir: "/home/aiscuser/experiments/outputs/"
 seed: 42 
 
@@ -16,7 +16,7 @@ data:
 training:
   pretrain_from_scratch: true
   init_method: 'kaiming_normal' #['xavier_uniform', 'kaiming_normal', 'normal']
-  lr: 1e-3
+  lr: 5e-3
   weight_decay: 0.01
   eps: 1e-8
   beta1: 0.9
@@ -31,7 +31,7 @@ training:
   dataloader_drop_last: true
   
 scheduler:
-  name: 'cosine'
+  name: 'constant_with_warmup'
   warmup_ratio: 0.0
   num_cycles: 0.5
   decay_ratio: 0.1
