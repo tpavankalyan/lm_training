@@ -43,7 +43,7 @@ def run_inference(args):
 
         generated_texts = tokenizer.batch_decode(outputs, skip_special_tokens=True)
         
-        new_column_name = args.model_path.replace("/", "_").replace("-", "_") + "_generation"
+        new_column_name = args.model_path.split("/")[-1]
         return {new_column_name: generated_texts}
 
     print("Running batch inference...")
@@ -54,7 +54,7 @@ def run_inference(args):
         desc=f"Generating text with {args.model_path}"
     )
 
-    print(f"Pushing dataset to Hub repository '{args.hub_repo_id}'...")
+    print(f"Pushing dataset to Hub repository '{args.dataset_name}'...")
     updated_dataset.push_to_hub(args.dataset_name)
     print("Inference complete and dataset pushed to the Hub successfully!")
 
