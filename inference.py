@@ -7,16 +7,18 @@ def generate_single(prompt, model_path, max_new_tokens=128, device='cuda'):
     model = AutoModelForCausalLM.from_pretrained(model_path).to(device)
     model.eval()
     inputs = tokenizer(prompt, return_tensors='pt').to(device)
+    prompt_len = inputs['input_ids'].shape[-1]  # Length of the prompt tokens
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
             do_sample=True,
-            top_p=0.95,
-            temperature=1.0,
+            top_p=0.9,
+            temperature=0.7,
             pad_token_id=tokenizer.eos_token_id
         )
-    return tokenizer.decode(outputs[0], skip_special_tokens=True)
+    new_token_ids = outputs[0][prompt_len:]
+    return tokenizer.decode(new_token_ids, skip_special_tokens=True)
 
 def generate_batch(prompts, model_path, max_new_tokens=256, device='cuda'):
     tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=True)
