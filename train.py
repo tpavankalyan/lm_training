@@ -239,7 +239,7 @@ def main():
     if scheduler_name == "linear":
         lr_config = {"num_warmup_steps": num_warmup_steps, "num_training_steps": num_training_steps}
     elif scheduler_name == "cosine":
-        lr_config = {"num_warmup_steps": num_warmup_steps, "num_training_steps": num_training_steps, "num_cycles": num_cycles}
+        lr_config = {"num_warmup_steps": num_warmup_steps, "num_training_steps": num_training_steps}
     elif scheduler_name == "constant_with_warmup":
         lr_config = {"num_warmup_steps": num_warmup_steps, "num_training_steps": num_training_steps}
     elif scheduler_name == "warmup_stable_decay":
