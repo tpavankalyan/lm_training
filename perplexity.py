@@ -1,3 +1,5 @@
+'''python perplexity.py --model_path Pavankalyan/tinystories_ncp_2 --dataset_path roneneldan/TinyStories --split validation --text_column text'''
+
 import argparse
 import math
 import torch
