@@ -20,7 +20,7 @@ def run_inference(args):
     tokenizer.padding_side = "left"
 
     print(f"Loading dataset '{args.dataset_name}' (split: {args.dataset_split})...")
-    dataset = load_dataset(args.dataset_name, split=args.dataset_split).select(range(1000))
+    dataset = load_dataset(args.dataset_name, split=args.dataset_split)
 
     def generate_in_batch(batch):
         prompts = batch[args.column_name]
@@ -33,21 +33,17 @@ def run_inference(args):
         ).to(model.device)
         
         prompt_input_ids = inputs['input_ids']
-        rompt_lengths = inputs['attention_mask'].sum(dim=1)
+        prompt_lengths = inputs['attention_mask'].sum(dim=1)
 
         with torch.no_grad():
             outputs = model.generate(
                 **inputs,
                 max_new_tokens=args.max_new_tokens,
-                do_sample=False,
-                top_p=0.9,
+                do_sample=True,
+                top_p=0.95,
                 temperature=0.7,
                 pad_token_id=tokenizer.eos_token_id,
-                eos_token_id=tokenizer.eos_token_id,  
-                early_stopping=True,  
-                repetition_penalty=1.1,  
-                num_return_sequences=1,
-                length_penalty=1.1,
+                eos_token_id=tokenizer.eos_token_id,
             )
 
         generated_new_tokens = []
@@ -58,7 +54,7 @@ def run_inference(args):
                 new_text = full_text[len(prompt_text):].strip()
             else:
                 new_tokens = outputs[i, prompt_lengths[i]:]
-                new_text = tokenizer.decode(new_tokens, skip_special_tokens=False)
+                new_text = tokenizer.decode(new_tokens, skip_special_tokens=True)
             generated_new_tokens.append(new_text)
             
         new_column_name = args.model_path.split("/")[-1]
