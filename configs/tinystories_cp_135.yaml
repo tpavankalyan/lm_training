@@ -1,27 +1,28 @@
 # Example config for LLM training
-model_name: HuggingFaceTB/SmolLM2-135M  # Model name or path
-run_name: "tinystories_ncp_3"  # Unique run name for this experiment
-run_dir: "/home/aiscuser/experiments/outputs/"
+model_name: roneneldan/TinyStories-33M  # Model name or path
+run_name: "tinystories_33M_rep6"  # Unique run name for this experiment
+run_dir: "/datadrive/pavan/experiments/outputs/"
 seed: 42 
 
 data:
-  processed_path: "/home/aiscuser/experiments/outputs/tokenized_datasets/tinystories_ncp_1/"
+  processed_path: "/datadrive/pavan/experiments/outputs/tokenized_datasets/tinystories_33M_rep"
   dataset_name: roneneldan/TinyStories
   split: train
   streaming: false
   max_length: 512
   append_eos: true
   context_packing: false
+  column_name: 'text'
 
 training:
   pretrain_from_scratch: true
   init_method: 'kaiming_normal' #['xavier_uniform', 'kaiming_normal', 'normal']
-  lr: 5e-3
-  weight_decay: 0.01
-  eps: 1e-8
+  lr: 5e-4
+  weight_decay: 0.1
+  eps: 5e-4
   beta1: 0.9
-  beta2: 0.98
-  batch_size: 100
+  beta2: 0.95
+  batch_size: 80
   gradient_accumulation_steps: 4
   epochs: 10
   bf16: true
