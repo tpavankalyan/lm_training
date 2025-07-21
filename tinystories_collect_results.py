@@ -6,7 +6,7 @@ import re
 
 root_dir = "/home/aiscuser/experiments/tinystories_eval"
 
-res_name = "seed_tinystories_ncp_3"
+res_name = "seed_tinystories_33M_rep4"
 
 
 hf_df = load_dataset(
