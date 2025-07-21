@@ -30,8 +30,8 @@ def load_config(path):
     with open(path, 'r') as f:
         return yaml.safe_load(f)
 
-def tokenize_and_count(batch, tokenizer, max_length, append_eos=True):
-    texts = batch['text']
+def tokenize_and_count(batch, tokenizer, max_length, append_eos=True, column_name='text'):
+    texts = batch[column_name]
     if append_eos:
         texts = [text + f" {tokenizer.eos_token}\n" for text in texts]
     out = tokenizer(
@@ -109,6 +109,7 @@ def main():
     append_eos      = config['data'].get('append_eos', True)
     context_packing = config['data'].get('context_packing', False)
     processed_path  = config['data'].get('processed_path', None)
+    column_name     = config['data'].get('column_name', 'text')
     # Training related parameters
     pretraining_from_scratch = config['training'].get('pretrain_from_scratch', False)
     init_method = config['training'].get('init_method', 'xavier_uniform')
@@ -145,8 +146,9 @@ def main():
     set_seed(seed)
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    # if tokenizer.pad_token is None:
+    #     tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.pad_token = "<|pad|>"
 
     if processed_path:
         print(f"Loading preprocessed dataset from {processed_path}")
@@ -158,7 +160,7 @@ def main():
         print(f"Dataset loaded: {len(ds)} examples")
 
         ds = ds.map(
-            lambda batch: tokenize_and_count(batch, tokenizer, max_length, append_eos),
+            lambda batch: tokenize_and_count(batch, tokenizer, max_length, append_eos, column_name),
             batched=True,
             remove_columns=ds.column_names,
             num_proc=os.cpu_count(),
