@@ -1,4 +1,4 @@
-'''python perplexity.py --model_path Pavankalyan/tinystories_ncp_2 --dataset_path roneneldan/TinyStories --split validation --text_column text'''
+'''Pavankalyan/tinystories_33M_padded_1'''
 "Once upon a time, in a big forest, there lived a rhinoceros named Roxy. Roxy loved to climb. She climbed trees, rocks, and hills. One day, Roxy found an icy hill. She had never seen anything like it before. It was shiny and cold, and she wanted to climb it. Roxy tried to climb the icy hill, but it was very slippery. She tried again and again, but she kept falling down. Roxy was sad. She wanted to climb the icy hill so much. Then, she saw a little bird named Billy. Billy saw that Roxy was sad and asked, 'Why are you sad, Roxy?' Roxy told Billy about the icy hill and how she couldn't climb"
 import argparse
 import math
