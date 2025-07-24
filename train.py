@@ -146,9 +146,10 @@ def main():
     set_seed(seed)
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
+    added_tokens = tokenizer.add_tokens(['<|pad|>'], special_tokens=True)
     # if tokenizer.pad_token is None:
     #     tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.pad_token = "<|pad|>"
+    tokenizer.pad_token = '<|pad|>'
 
     if processed_path:
         print(f"Loading preprocessed dataset from {processed_path}")
@@ -221,9 +222,11 @@ def main():
 
     if pretraining_from_scratch:
         model = AutoModelForCausalLM.from_config(AutoConfig.from_pretrained(model_name))
+        model.resize_token_embeddings(len(tokenizer))
         initialize_model_weights(model, init_method)
     else:
         model = AutoModelForCausalLM.from_pretrained(model_name)
+        model.resize_token_embeddings(len(tokenizer))
         
     optimizer = AdamW(
         model.parameters(),
@@ -238,16 +241,8 @@ def main():
     num_stable_steps = num_training_steps - num_warmup_steps - num_decay_steps
     
     lr_config = {}
-    if scheduler_name == "linear":
-        lr_config = {"num_warmup_steps": num_warmup_steps, "num_training_steps": num_training_steps}
-    elif scheduler_name == "cosine":
-        lr_config = {"num_warmup_steps": num_warmup_steps, "num_training_steps": num_training_steps}
-    elif scheduler_name == "constant_with_warmup":
-        lr_config = {"num_warmup_steps": num_warmup_steps, "num_training_steps": num_training_steps}
-    elif scheduler_name == "warmup_stable_decay":
+    if scheduler_name == "warmup_stable_decay":
         lr_config = {
-            "num_warmup_steps": num_warmup_steps,
-            "num_training_steps": num_training_steps,
             "num_stable_steps": num_stable_steps,
             "min_lr_ratio": min_lr_ratio,
             "decay_type": decay_type,
@@ -259,7 +254,9 @@ def main():
     lr_scheduler = get_scheduler(
         name=scheduler_name,
         optimizer=optimizer,
-        **lr_config
+        num_warmup_steps=num_warmup_steps,
+        num_training_steps=num_training_steps,
+        scheduler_specific_kwargs=lr_config
     )
     
     output_dir = run_dir + "/checkpoints/" + run_name
