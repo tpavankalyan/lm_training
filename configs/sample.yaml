@@ -1,0 +1,82 @@
+# ===================================================================
+# Model and Run Configuration
+# ===================================================================
+model:
+  name: 'HuggingFaceTB/SmolLM2-135M'                # Base model identifier from Hugging Face Hub
+  run_name: 'c0_padded' # A specific name for this training run (for logging)
+  seed: 42
+
+# ===================================================================
+# Data Configuration
+# ===================================================================
+data:
+  # --- Training Data ---
+  dataset_name: 'Pavankalyan/stage0_c_all'                   # Example: 'c4', 'wikitext', 'the_pile'
+  split: 'train'                       # The split to use for training
+  streaming: True                      # CRITICAL: Must be true for billion-token datasets
+  column_name: 'output'                  # The column in the dataset containing the text
+  max_length: 2048                     # Max sequence length for the model
+  append_eos: True                     # Append End-of-Sentence token to each example
+  
+  # --- Evaluation Data (Optional but Recommended) ---
+  # eval_dataset_name: null
+  # eval_split: 'validation'
+  # eval_samples: 1000                   # Number of samples to use for evaluation from the stream
+
+  # --- Pre-processed Data (Optional) ---
+  # If you have already tokenized the dataset and saved it to disk, provide the path.
+  # This skips the online tokenization step. Streaming will be disabled if this is used.
+  processed_path: null # e.g., './tokenized_c4_dataset'
+
+# ===================================================================
+# Training Configuration
+# ===================================================================
+training:
+  pretrain_from_scratch: True          # Set to True to initialize weights randomly
+  init_method: 'xavier_uniform'        # Weight initialization method if pretraining
+
+  # --- Core Training Hyperparameters ---
+  # For large datasets, it's standard to train for a fixed number of steps.
+  max_steps: 500000                    # Total number of training steps
+  batch_size: 8                        # Per-device batch size
+  gradient_accumulation_steps: 4       # Effective batch size = batch_size * num_gpus * gas
+  lr: 3.0e-4                           # Learning rate
+
+  # --- Optimizer Settings (AdamW) ---
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  eps: 1.0e-8
+  max_grad_norm: 1.0
+
+  # --- Memory and Precision ---
+  bf16: True                           # Use bfloat16 precision (recommended for Ampere GPUs and newer)
+  fp16: False                          # Use float16 if bf16 is not available. Don't use both.
+  gradient_checkpointing: True         # CRITICAL for memory saving
+
+  # --- Dataloader Settings ---
+  dataloader_drop_last: True
+  dataloader_num_workers: 8            # Adjust based on your machine's CPU cores
+
+# ===================================================================
+# Scheduler Configuration
+# ===================================================================
+scheduler:
+  name: 'cosine'                       # LR scheduler type (e.g., 'linear', 'cosine')
+  warmup_ratio: 0.01                   # Percentage of total steps for linear warmup
+
+# ===================================================================
+# Logging and Saving Configuration
+# ===================================================================
+logging:
+  run_dir: './training_runs'           # Base directory to save all outputs
+  overwrite_output_dir: False          # Avoid accidentally overwriting a run
+  report_to: 'wandb'                   # Logging destination ('wandb', 'tensorboard', 'none')
+  
+  # --- Frequency of Operations ---
+  logging_steps: 10                    # Log metrics every N steps
+  save_steps: 500                      # Save a checkpoint every N steps
+  eval_steps: 500                      # Perform evaluation every N steps
+  
+  # --- Checkpoint Management ---
+  save_total_limit: 3                  # Keep only the last 3 checkpoints to save disk space

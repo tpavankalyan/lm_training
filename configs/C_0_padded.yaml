@@ -1,0 +1,54 @@
+# Example config for LLM training
+model_name: HuggingFaceTB/SmolLM2-135M
+run_name: "C_0_padded"  # Unique run name for this experiment
+run_dir: "/datadrive/pavan/experiments/outputs/"
+seed: 42 
+
+data:
+  processed_path: "/datadrive/pavan/experiments/outputs/tokenized_datasets/C_0_padded"
+  dataset_name: Pavankalyan/stage0_c_all
+  split: train
+  max_length: 1024
+  append_eos: true
+  context_packing: false
+  column_name: 'output'
+  streaming: true
+  # buffer_size: 1000
+
+training:
+  pretrain_from_scratch: true
+  init_method: 'kaiming_normal' #['xavier_uniform', 'kaiming_normal', 'normal']
+  lr: 5e-3
+  weight_decay: 0.01
+  eps: 1e-8
+  beta1: 0.9
+  beta2: 0.98
+  batch_size: 80
+  gradient_accumulation_steps: 4
+  epochs: 5
+  bf16: true
+  fp16: false 
+  ddp_find_unused_parameters: false
+  max_grad_norm: 1.0
+  dataloader_drop_last: true
+  # steps_per_epoch: 10000 
+  # dataloader_num_workers: 4
+  
+scheduler:
+  name: 'warmup_stable_decay'
+  warmup_ratio: 0.0
+  num_cycles: 0.5
+  decay_ratio: 1.0
+  warmup_type: 'linear'
+  decay_type: 'cosine'
+  min_lr_ratio: 0.0
+
+logging:
+  overwrite_output_dir: true
+  save_steps_ratio: 0.25
+  save_total_limit: 5
+  logging_steps: 1
+  report_to: 'wandb'
+  save_strategy: 'epoch'
+  logging_strategy: 'steps'
+
