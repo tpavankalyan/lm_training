@@ -5,7 +5,7 @@ run_dir: "/datadrive/pavan/experiments/outputs/"
 seed: 42 
 
 data:
-  processed_path: "/datadrive/pavan/experiments/outputs/tokenized_datasets/C_0_padded"
+  # processed_path: "/datadrive/pavan/experiments/outputs/tokenized_datasets/C_0_padded"
   dataset_name: Pavankalyan/stage0_c_all
   split: train
   max_length: 1024
@@ -23,9 +23,9 @@ training:
   eps: 1e-8
   beta1: 0.9
   beta2: 0.98
-  batch_size: 48
+  batch_size: 64
   gradient_accumulation_steps: 4
-  epochs: 5
+  epochs: 1
   bf16: true
   fp16: false 
   ddp_find_unused_parameters: false
@@ -35,7 +35,7 @@ training:
   # dataloader_num_workers: 4
   
 scheduler:
-  name: 'warmup_stable_decay'
+  name: 'constant_with_warmup' #'warmup_stable_decay'
   warmup_ratio: 0.0
   num_cycles: 0.5
   decay_ratio: 1.0
