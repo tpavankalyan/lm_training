@@ -23,7 +23,7 @@ training:
   eps: 1e-8
   beta1: 0.9
   beta2: 0.98
-  batch_size: 80
+  batch_size: 48
   gradient_accumulation_steps: 4
   epochs: 5
   bf16: true

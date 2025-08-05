@@ -16,6 +16,7 @@ import argparse
 import random
 from torch.optim import AdamW
 from transformers import get_scheduler
+from tqdm import tqdm
 
 def set_seed(seed):
     torch.manual_seed(seed)
@@ -154,7 +155,7 @@ def main():
     if processed_path:
         print(f"Loading preprocessed dataset from {processed_path}")
         ds = load_from_disk(processed_path)
-        total_tokens = sum(len(ids) for ids in ds['input_ids'])
+        # total_tokens = sum(len(ids) for ids in tqdm(ds['input_ids']))
     else:
         ds = load_dataset(dataset_name, split=split, streaming=streaming)
 
@@ -184,8 +185,8 @@ def main():
     # Print dataset statistics
     print(f"Dataset statistics:")
     print(f"  - Number of examples: {len(ds)}")
-    print(f"  - Total tokens: {total_tokens:,}")
-    print(f"  - Average tokens per example: {total_tokens / len(ds):.1f}")
+    # print(f"  - Total tokens: {total_tokens:,}")
+    # print(f"  - Average tokens per example: {total_tokens / len(ds):.1f}")
     print(f"  - Max sequence length: {max_length}")
     
     # Verify if the data is tokenized correctly
