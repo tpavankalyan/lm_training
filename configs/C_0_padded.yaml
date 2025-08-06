@@ -1,6 +1,6 @@
 # Example config for LLM training
 model_name: HuggingFaceTB/SmolLM2-135M
-run_name: "C_0_padded"  # Unique run name for this experiment
+run_name: "C_0_padded_0"  # Unique run name for this experiment
 run_dir: "/datadrive/pavan/experiments/outputs/"
 seed: 42 
 
@@ -12,7 +12,7 @@ data:
   append_eos: true
   context_packing: false
   column_name: 'output'
-  streaming: true
+  streaming: false
   # buffer_size: 1000
 
 training:
@@ -23,7 +23,7 @@ training:
   eps: 1e-8
   beta1: 0.9
   beta2: 0.98
-  batch_size: 64
+  batch_size: 48
   gradient_accumulation_steps: 4
   epochs: 1
   bf16: true
