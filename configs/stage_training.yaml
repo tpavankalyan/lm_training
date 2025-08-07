@@ -1,6 +1,6 @@
 # Example config for LLM training
 model_name: HuggingFaceTB/SmolLM2-135M
-run_name: "dummy"  # Unique run name for this experiment
+run_name: "dummy2"  # Unique run name for this experiment
 run_dir: "/datadrive/pavan/experiments/outputs/"
 seed: 42 
 
@@ -10,17 +10,18 @@ data:
   split: train
   max_length: 1024
   column_name: 'text'
-  streaming: false
+  streaming: true
+  dataset_size: 27201533
 
 training:
   pretrain_from_scratch: true
   init_method: 'kaiming_normal' #['xavier_uniform', 'kaiming_normal', 'normal']
-  lr: 5e-3
+  lr: 4e-3
   weight_decay: 0.01
   eps: 1e-8
   beta1: 0.9
   beta2: 0.98
-  batch_size: 24
+  batch_size: 48
   gradient_accumulation_steps: 8
   epochs: 1
   bf16: true
@@ -31,7 +32,7 @@ training:
   
 scheduler:
   name: 'constant_with_warmup' #'warmup_stable_decay'
-  warmup_ratio: 0.0
+  warmup_ratio: 0.1
   num_cycles: 0.5
   decay_ratio: 1.0
   warmup_type: 'linear'

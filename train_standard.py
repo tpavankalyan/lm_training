@@ -33,7 +33,6 @@ def load_config(path):
     
 def tokenize_data(batch, tokenizer, max_length, column_name='text'):
     texts = batch[column_name]
-    print(texts[0])
     out = tokenizer(
         texts,
         truncation=True,
@@ -41,8 +40,6 @@ def tokenize_data(batch, tokenizer, max_length, column_name='text'):
         padding='max_length',
         return_length=True
     )
-    print(out['input_ids'][0])
-    
     out['num_tokens'] = out['length']
     return out
 
@@ -83,6 +80,7 @@ def main():
     max_length      = config['data'].get('max_length', 2048)
     processed_path  = config['data'].get('processed_path', None)
     column_name     = config['data'].get('column_name', 'text')
+    data_num_ins    = config['data'].get('dataset_size', None)
     # Training related parameters
     pretraining_from_scratch = config['training'].get('pretrain_from_scratch', False)
     init_method = config['training'].get('init_method', 'xavier_uniform')
@@ -125,44 +123,55 @@ def main():
         print(f"Loading preprocessed dataset from {processed_path}")
         ds = load_from_disk(processed_path)
     else:
-        ds = load_dataset(dataset_name, split=split, streaming=streaming).select(range(10000))
-        print(f"Dataset loaded: {len(ds)} examples")
+        ds = load_dataset(dataset_name, split=split, streaming=streaming)
+        if not streaming:
+            print(f"Dataset loaded: {len(ds)} examples")
 
-        ds = ds.map(
-            lambda batch: tokenize_data(batch, tokenizer, max_length, column_name=column_name),
-            batched=True,
-            remove_columns=ds.column_names,
-            num_proc=os.cpu_count(),
-            desc="Tokenizing dataset"
-        )
+            ds = ds.map(
+                lambda batch: tokenize_data(batch, tokenizer, max_length, column_name=column_name),
+                batched=True,
+                remove_columns=ds.column_names,
+                num_proc=os.cpu_count(),
+                desc="Tokenizing dataset"
+            )
         
-        ds.save_to_disk(os.path.join(run_dir, "tokenized_datasets", run_name))
+            ds.save_to_disk(os.path.join(run_dir, "tokenized_datasets", run_name))
+        else:
+            ds = ds.map(
+                lambda batch: tokenize_data(batch, tokenizer, max_length, column_name=column_name),
+                batched=True,
+                remove_columns=ds.column_names
+            )
 
-    total_tokens = sum(ds['num_tokens']) if 'num_tokens' in ds.features else sum(len(ids) for ids in tqdm(ds['input_ids']))
-    # Print dataset statistics
-    print(f"Dataset statistics:")
-    print(f"  - Number of examples: {len(ds)}")
-    print(f"  - Total tokens: {total_tokens:,}")
-    print(f"  - Average tokens per example: {total_tokens / len(ds):.1f}")
-    print(f"  - Max sequence length: {max_length}")
-    
-    # Verify if the data is tokenized correctly
-    if 'input_ids' not in ds.features:
-        raise ValueError("Dataset does not contain 'input_ids'. Ensure the dataset is tokenized correctly.")
-    if 'attention_mask' not in ds.features:
-        raise ValueError("Dataset does not contain 'attention_mask'. Ensure the dataset is padded correctly.")
-    if len(ds) == 0:
-        raise ValueError("Dataset is empty. Check the tokenization and padding steps.")
-    if len(ds[0]['input_ids']) != max_length:
-        raise ValueError(f"Input IDs length mismatch: expected {max_length}, got {len(ds[0]['input_ids'])}")
-    if len(ds[0]['attention_mask']) != max_length:
-        raise ValueError(f"Attention mask length mismatch: expected {max_length}, got {len(ds[0]['attention_mask'])}")
+    if not streaming:
+        total_tokens = sum(ds['num_tokens']) if 'num_tokens' in ds.features else sum(len(ids) for ids in tqdm(ds['input_ids']))
+        # Print dataset statistics
+        print(f"Dataset statistics:")
+        print(f"  - Number of examples: {len(ds)}")
+        print(f"  - Total tokens: {total_tokens:,}")
+        print(f"  - Average tokens per example: {total_tokens / len(ds):.1f}")
+        print(f"  - Max sequence length: {max_length}")
+        
+    # # Verify if the data is tokenized correctly
+    # if 'input_ids' not in ds.features:
+    #     raise ValueError("Dataset does not contain 'input_ids'. Ensure the dataset is tokenized correctly.")
+    # if 'attention_mask' not in ds.features:
+    #     raise ValueError("Dataset does not contain 'attention_mask'. Ensure the dataset is padded correctly.")
+    # if len(ds) == 0:
+    #     raise ValueError("Dataset is empty. Check the tokenization and padding steps.")
+    # if len(ds[0]['input_ids']) != max_length:
+    #     raise ValueError(f"Input IDs length mismatch: expected {max_length}, got {len(ds[0]['input_ids'])}")
+    # if len(ds[0]['attention_mask']) != max_length:
+    #     raise ValueError(f"Attention mask length mismatch: expected {max_length}, got {len(ds[0]['attention_mask'])}")
     
     #print dataset example
     print(f"Example from dataset: {ds[0]}")
     
     num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
-    dataset_size = len(ds)
+    if streaming:
+        dataset_size = data_num_ins
+    else:
+        dataset_size = len(ds)
     steps_per_epoch = dataset_size // (batch_size * gas * num_gpus)
     num_training_steps = steps_per_epoch * epochs
     
@@ -221,10 +230,10 @@ def main():
     save_steps = int(save_steps_ratio * num_training_steps)
     
     # More conservative training args
-    training_args = TrainingArguments(
+    if streaming:
+        training_args = TrainingArguments(
         output_dir=output_dir,
         overwrite_output_dir=overwrite_output_dir,
-        num_train_epochs=epochs,
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=gas,
         save_steps=save_steps,
@@ -236,9 +245,27 @@ def main():
         ddp_find_unused_parameters=ddp_find_unused_parameters,
         max_grad_norm=max_grad_norm,
         dataloader_drop_last=dataloader_drop_last,
-        save_strategy=save_strategy,
-        logging_strategy=logging_strategy
-    )
+        max_steps=num_training_steps
+        )
+    else:
+        training_args = TrainingArguments(
+            output_dir=output_dir,
+            overwrite_output_dir=overwrite_output_dir,
+            num_train_epochs=epochs,
+            per_device_train_batch_size=batch_size,
+            gradient_accumulation_steps=gas,
+            save_steps=save_steps,
+            save_total_limit=save_total_limit,
+            fp16=fp16,
+            bf16=bf16,
+            logging_steps=logging_steps,
+            report_to=report_to,
+            ddp_find_unused_parameters=ddp_find_unused_parameters,
+            max_grad_norm=max_grad_norm,
+            dataloader_drop_last=dataloader_drop_last,
+            save_strategy=save_strategy,
+            logging_strategy=logging_strategy
+        )
     
     trainer = Trainer(
         model=model,
