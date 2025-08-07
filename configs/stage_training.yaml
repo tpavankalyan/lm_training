@@ -1,19 +1,16 @@
 # Example config for LLM training
 model_name: HuggingFaceTB/SmolLM2-135M
-run_name: "Stage0"  # Unique run name for this experiment
-run_dir: "/scratch/azureml/cr/j/1660094999f646da9cdd724812336919/cap/data-capability/wd/INPUT_asdf/experiment_results/Stage0"
+run_name: "dummy"  # Unique run name for this experiment
+run_dir: "/datadrive/pavan/experiments/outputs/"
 seed: 42 
 
 data:
-  processed_path: "/scratch/azureml/cr/j/1660094999f646da9cdd724812336919/cap/data-capability/wd/INPUT_asdf/experiment_results/S_0_all_0/tokenized_datasets/S_0_all_0"
+  # processed_path: "/scratch/azureml/cr/j/1660094999f646da9cdd724812336919/cap/data-capability/wd/INPUT_asdf/experiment_results/S_0_all_0/tokenized_datasets/S_0_all_0"
   dataset_name: Pavankalyan/stage0_train
   split: train
   max_length: 1024
-  append_eos: true
-  context_packing: false
   column_name: 'text'
   streaming: false
-  # buffer_size: 1000
 
 training:
   pretrain_from_scratch: true
@@ -31,8 +28,6 @@ training:
   ddp_find_unused_parameters: false
   max_grad_norm: 1.0
   dataloader_drop_last: true
-  # steps_per_epoch: 10000 
-  # dataloader_num_workers: 4
   
 scheduler:
   name: 'constant_with_warmup' #'warmup_stable_decay'

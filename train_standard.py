@@ -30,47 +30,21 @@ def set_seed(seed):
 def load_config(path):
     with open(path, 'r') as f:
         return yaml.safe_load(f)
-
-def tokenize_and_count(batch, tokenizer, max_length, append_eos=True, column_name='text'):
+    
+def tokenize_data(batch, tokenizer, max_length, column_name='text'):
     texts = batch[column_name]
-    if append_eos:
-        texts = [text + f" {tokenizer.eos_token}\n" for text in texts]
+    print(texts[0])
     out = tokenizer(
         texts,
         truncation=True,
         max_length=max_length,
-        padding=False
+        padding='max_length',
+        return_length=True
     )
-    out['num_tokens'] = [len(ids) for ids in out['input_ids']]
+    print(out['input_ids'][0])
+    
+    out['num_tokens'] = out['length']
     return out
-
-def context_pack(ds, tokenizer, max_length):
-    all_input_ids = np.concatenate([ex['input_ids'] for ex in ds]).astype(np.int32)
-    n_chunks = math.ceil(len(all_input_ids) / max_length)
-    total_needed = n_chunks * max_length
-    if len(all_input_ids) < total_needed:
-        all_input_ids = np.pad(
-            all_input_ids,
-            (0, total_needed - len(all_input_ids)),
-            constant_values=tokenizer.pad_token_id
-        )
-    all_input_ids = all_input_ids.reshape((n_chunks, max_length))
-    attention_mask = (all_input_ids != tokenizer.pad_token_id).astype(np.int32)
-    ds = Dataset.from_dict({
-        'input_ids': all_input_ids.tolist(),
-        'attention_mask': attention_mask.tolist()
-    })
-    return ds
-
-def pad_dataset(ds, tokenizer, max_length):
-    def pad_fn(batch):
-        return tokenizer.pad(
-            {'input_ids': batch['input_ids']},
-            padding='max_length',
-            max_length=max_length
-        )
-    ds = ds.map(pad_fn, batched=True, num_proc=os.cpu_count(), desc="Padding dataset")
-    return ds
 
 def initialize_model_weights(model, init_method='xavier_uniform'):
     for name, param in model.named_parameters():
@@ -107,8 +81,6 @@ def main():
     split           = config['data'].get('split', 'train')
     streaming       = config['data'].get('streaming', False)
     max_length      = config['data'].get('max_length', 2048)
-    append_eos      = config['data'].get('append_eos', True)
-    context_packing = config['data'].get('context_packing', False)
     processed_path  = config['data'].get('processed_path', None)
     column_name     = config['data'].get('column_name', 'text')
     # Training related parameters
@@ -145,48 +117,33 @@ def main():
     logging_strategy = config['logging'].get('logging_strategy', 'steps')
 
     set_seed(seed)
-
     tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
-    added_tokens = tokenizer.add_tokens(['<|pad|>'], special_tokens=True)
-    # if tokenizer.pad_token is None:
-    #     tokenizer.pad_token = tokenizer.eos_token
+    added_tokens = tokenizer.add_tokens(['<|pad|>', '<|system|>', '<|user|>', '<|assistant|>'], special_tokens=True)
     tokenizer.pad_token = '<|pad|>'
 
     if processed_path:
         print(f"Loading preprocessed dataset from {processed_path}")
         ds = load_from_disk(processed_path)
-        total_tokens = sum(len(ids) for ids in tqdm(ds['input_ids']))
     else:
-        ds = load_dataset(dataset_name, split=split, streaming=streaming)
-
+        ds = load_dataset(dataset_name, split=split, streaming=streaming).select(range(10000))
         print(f"Dataset loaded: {len(ds)} examples")
 
         ds = ds.map(
-            lambda batch: tokenize_and_count(batch, tokenizer, max_length, append_eos, column_name),
+            lambda batch: tokenize_data(batch, tokenizer, max_length, column_name=column_name),
             batched=True,
             remove_columns=ds.column_names,
             num_proc=os.cpu_count(),
             desc="Tokenizing dataset"
         )
         
-        total_tokens = sum(ds['num_tokens']) if 'num_tokens' in ds.features else sum(len(ids) for ids in ds['input_ids'])
-        if 'num_tokens' in ds.features:
-            ds = ds.remove_columns(['num_tokens'])
-            
-        if context_packing:
-            if streaming:
-                raise ValueError("Context packing with streaming datasets is unsupported.")
-            ds = context_pack(ds, tokenizer, max_length)
-        else:
-            ds = pad_dataset(ds, tokenizer, max_length)
-
         ds.save_to_disk(os.path.join(run_dir, "tokenized_datasets", run_name))
 
+    total_tokens = sum(ds['num_tokens']) if 'num_tokens' in ds.features else sum(len(ids) for ids in tqdm(ds['input_ids']))
     # Print dataset statistics
     print(f"Dataset statistics:")
     print(f"  - Number of examples: {len(ds)}")
-    # print(f"  - Total tokens: {total_tokens:,}")
-    # print(f"  - Average tokens per example: {total_tokens / len(ds):.1f}")
+    print(f"  - Total tokens: {total_tokens:,}")
+    print(f"  - Average tokens per example: {total_tokens / len(ds):.1f}")
     print(f"  - Max sequence length: {max_length}")
     
     # Verify if the data is tokenized correctly
