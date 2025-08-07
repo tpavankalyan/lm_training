@@ -143,10 +143,10 @@ def main():
         
             ds.save_to_disk(os.path.join(run_dir, "tokenized_datasets", run_name))
         else:
-            ds = ds.map(
+            ds = shuffled_dataset.map(
                 lambda batch: tokenize_data(batch, tokenizer, max_length, column_name=column_name),
                 batched=True,
-                remove_columns=ds.column_names
+                remove_columns=shuffled_dataset.column_names
             )
 
     if not streaming:
