@@ -1,0 +1,52 @@
+# Example config for LLM training
+model_name: HuggingFaceTB/SmolLM2-135M
+run_name: "stage01_training"  # Unique run name for this experiment
+run_dir: "/datadrive/pavan/experiments/outputs/"
+seed: 42 
+
+data:
+  # processed_path: "/scratch/azureml/cr/j/1660094999f646da9cdd724812336919/cap/data-capability/wd/INPUT_asdf/experiment_results/S_0_all_0/tokenized_datasets/S_0_all_0"
+  dataset_names: 
+    - Pavankalyan/stage0_train
+    - Pavankalyan/stage1_train
+  split: train
+  max_length: 1024
+  column_name: 'text'
+  streaming: true
+  dataset_size: 63112316
+
+training:
+  pretrain_from_scratch: true
+  init_method: 'kaiming_normal' #['xavier_uniform', 'kaiming_normal', 'normal']
+  lr: 4e-3
+  weight_decay: 0.01
+  eps: 1e-8
+  beta1: 0.9
+  beta2: 0.98
+  batch_size: 48
+  gradient_accumulation_steps: 8
+  epochs: 1
+  bf16: true
+  fp16: false 
+  ddp_find_unused_parameters: false
+  max_grad_norm: 1.0
+  dataloader_drop_last: true
+  
+scheduler:
+  name: 'constant_with_warmup' #'warmup_stable_decay'
+  warmup_ratio: 0.1
+  num_cycles: 0.5
+  decay_ratio: 1.0
+  warmup_type: 'linear'
+  decay_type: 'cosine'
+  min_lr_ratio: 0.0
+
+logging:
+  overwrite_output_dir: true
+  save_steps_ratio: 0.25
+  save_total_limit: 5
+  logging_steps: 1
+  report_to: 'wandb'
+  save_strategy: 'epoch'
+  logging_strategy: 'steps'
+
