@@ -5,24 +5,134 @@ import pandas as pd
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from datasets import load_dataset
 from tqdm import tqdm
+import gspread
+from google.oauth2.service_account import Credentials
+import os
+from datetime import datetime
+import time
 
-def main():
-    parser = argparse.ArgumentParser(description="Compute perplexity on a specified dataset split.")
-    parser.add_argument("--model_path", type=str, required=True, help="Hugging Face model path or ID.")
-    parser.add_argument("--dataset_path", type=str, required=True, help="Path or name of the HF dataset.")
-    parser.add_argument("--split", type=str, default="val", help="Dataset split to use.")
-    parser.add_argument("--text_column", type=str, default="output", help="Column name containing text.")
-    parser.add_argument("--hierarchy_columns", nargs=4, default=["skill", "subskill", "goal", "indicator"], help="List of 4 columns representing hierarchy A > B > C > D.")
-    parser.add_argument("--max_length", type=int, default=512, help="Max sequence length.")
-    parser.add_argument("--output_csv", type=str, default="perplexity_results.csv", help="Output CSV file.")
-    args = parser.parse_args()
+def setup_google_sheets():
+    """Setup Google Sheets API credentials"""
+    scope = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    
+    creds = Credentials.from_service_account_file("/datadrive/pavan/experiments/agentdalal-6ea56a9e5ecc.json", scopes=scope)
+    client = gspread.authorize(creds)
+    return client
 
-    # Load tokenizer and model
+def update_google_sheet(client, spreadsheet_name, worksheet_name, results_df, model_name):
+    try:
+        spreadsheet = client.open(spreadsheet_name)
+        try:
+            worksheet = spreadsheet.worksheet(worksheet_name)
+        except gspread.WorksheetNotFound:
+            worksheet = spreadsheet.add_worksheet(title=worksheet_name, rows=1000, cols=20)
+            print(f"Created new worksheet: {worksheet_name}")
+        
+        try:
+            existing_data = worksheet.get_all_records()
+        except:
+            existing_data = []
+        
+        if not existing_data:
+            base_columns = ["level", "skill", "subskill", "goal", "indicator"]
+            header_row = base_columns + [f"{model_name}"]
+            worksheet.clear()
+            worksheet.update(values=[header_row], range_name='A1', value_input_option='RAW')
+            time.sleep(1)  # Rate limiting
+
+            data_rows = []
+            for _, row in results_df.iterrows():
+                data_row = [
+                    str(row["level"]) if pd.notna(row["level"]) else "", 
+                    str(row["skill"]) if pd.notna(row["skill"]) else "", 
+                    str(row["subskill"]) if pd.notna(row["subskill"]) else "", 
+                    str(row["goal"]) if pd.notna(row["goal"]) else "", 
+                    str(row["indicator"]) if pd.notna(row["indicator"]) else "", 
+                    float(row["perplexity"]) if pd.notna(row["perplexity"]) else 0.0
+                ]
+                data_rows.append(data_row)
+            
+            chunk_size = 100
+            for i in range(0, len(data_rows), chunk_size):
+                chunk = data_rows[i:i + chunk_size]
+                start_row = i + 2  # +2 because row 1 is header and rows are 1-indexed
+                end_row = start_row + len(chunk) - 1
+                range_str = f'A{start_row}:F{end_row}'
+                worksheet.update(range_str, chunk, value_input_option='RAW')
+            
+        else:
+            existing_df = pd.DataFrame(existing_data)
+            
+            header_row = worksheet.row_values(1)
+            new_col_letter = chr(ord('A') + len(header_row))
+            
+            worksheet.update(values=[[f'{model_name}_perplexity']], range_name=f'{new_col_letter}1', value_input_option='RAW')
+            time.sleep(1)  # Rate limiting
+            
+            existing_key_to_row = {}
+            for idx, row in existing_df.iterrows():
+                level = str(row.get("level", "")) if pd.notna(row.get("level", "")) else ""
+                skill = str(row.get("skill", "")) if pd.notna(row.get("skill", "")) else ""
+                subskill = str(row.get("subskill", "")) if pd.notna(row.get("subskill", "")) else ""
+                goal = str(row.get("goal", "")) if pd.notna(row.get("goal", "")) else ""
+                indicator = str(row.get("indicator", "")) if pd.notna(row.get("indicator", "")) else ""
+                
+                key = (level, skill, subskill, goal, indicator)
+                existing_key_to_row[key] = idx + 2  # +2 because row numbers are 1-indexed and we skip header
+            
+            batch_data = []
+            for _, row in results_df.iterrows():
+                level = str(row["level"]) if pd.notna(row["level"]) else ""
+                skill = str(row["skill"]) if pd.notna(row["skill"]) else ""
+                subskill = str(row["subskill"]) if pd.notna(row["subskill"]) else ""
+                goal = str(row["goal"]) if pd.notna(row["goal"]) else ""
+                indicator = str(row["indicator"]) if pd.notna(row["indicator"]) else ""
+                
+                key = (level, skill, subskill, goal, indicator)
+                if key in existing_key_to_row:
+                    row_num = existing_key_to_row[key]
+                    perplexity_value = float(row["perplexity"]) if pd.notna(row["perplexity"]) else 0.0
+                    batch_data.append({
+                        'range': f'{new_col_letter}{row_num}',
+                        'values': [[perplexity_value]]
+                    })
+            
+            chunk_size = 50  # Reduced chunk size for rate limiting
+            for i in range(0, len(batch_data), chunk_size):
+                chunk = batch_data[i:i + chunk_size]
+                if chunk:
+                    try:
+                        worksheet.batch_update(chunk, value_input_option='RAW')
+                        time.sleep(2)  # Rate limiting - wait 2 seconds between batches
+                        print(f"Updated batch {i//chunk_size + 1}/{(len(batch_data)-1)//chunk_size + 1}")
+                    except Exception as batch_error:
+                        print(f"Batch update failed, falling back to individual updates: {batch_error}")
+                        for update_item in chunk:
+                            try:
+                                worksheet.update(values=update_item['values'], 
+                                               range_name=update_item['range'], 
+                                               value_input_option='RAW')
+                                time.sleep(0.5)  # Rate limiting between individual updates
+                            except Exception as individual_error:
+                                print(f"Failed to update {update_item['range']}: {individual_error}")
+                                continue
+        
+        print(f"Successfully updated '{spreadsheet_name}' -> '{worksheet_name}' with {model_name} results")
+        
+    except Exception as e:
+        print(f"Error updating Google Sheet: {e}")
+        import traceback
+        traceback.print_exc()
+
+def compute_perplexity_and_update_sheet(args):
+    skill_cols = ["skill", "subskill", "goal", "indicator"]
+    print(f"Loading model: {args.model_path}")
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
     model = AutoModelForCausalLM.from_pretrained(args.model_path)
     model.eval().to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
-
-    # Load and tokenize dataset
     dataset = load_dataset(args.dataset_path, split=args.split)
 
     def tokenize(example):
@@ -44,24 +154,15 @@ def main():
             loss = outputs.loss.item()
             perplexity = math.exp(loss)
 
-        # Extract hierarchy columns and add perplexity
-        row = [example[col] for col in args.hierarchy_columns]
+        row = [example[col] for col in skill_cols]
         row.append(perplexity)
         results.append(row)
-
-    # Convert to DataFrame
-    df = pd.DataFrame(results, columns=args.hierarchy_columns + ["perplexity"])
-    
-    print(df)
-
-    # Sort by hierarchy
-    df = df.sort_values(by=args.hierarchy_columns).reset_index(drop=True)
-
+        
+    df = pd.DataFrame(results, columns=skill_cols + ["perplexity"])
     id_avg = df.groupby(['skill', 'goal', 'subskill', 'indicator'])['perplexity'].mean().reset_index()
 
     rows = []
-
-    # Group by skill → subskill → goal
+    all_skill_values=[]
     for skill, skill_df in id_avg.groupby('skill'):
         skill_values = []
         for subskill, subskill_df in skill_df.groupby('subskill'):
@@ -104,18 +205,41 @@ def main():
             "indicator": "average_" + skill,
             "perplexity": sum(skill_values) / len(skill_values)
         })
+        all_skill_values.extend(skill_values)
 
-    # Convert to DataFrame
-    flat_df = pd.DataFrame(rows)
-
-    # Optional: round perplexity for readability
-    flat_df['perplexity'] = flat_df['perplexity'].round(4)
+    rows.append({
+        "level": "overall_avg",
+        "skill": "overall",
+        "subskill": "",
+        "goal": "",
+        "indicator": "average_overall",
+        "perplexity": sum(all_skill_values) / len(all_skill_values)
+    })
     
-    print(flat_df)
+    results_df = pd.DataFrame(rows)
+    
+    spreadsheet_name = "CL_results"
+    w_name = args.dataset_path.split("/")[-1].split("_")[0][-1]
+    worksheet_name = f"C_{w_name}"
 
-    # Save to CSV
-    flat_df.to_csv(args.output_csv, index=False)
-    print(f"Saved results to {args.output_csv}")
+    if spreadsheet_name and worksheet_name:
+        print("Setting up Google Sheets connection...")
+        client = setup_google_sheets()
+        model_name = os.path.basename(args.model_path.rstrip('/'))
+        model_name = model_name.replace('/', '_').replace('-', '_')
+        update_google_sheet(client, spreadsheet_name, worksheet_name, results_df, model_name)
+
+def main():
+    parser = argparse.ArgumentParser(description="Compute perplexity on a specified dataset split and update Google Sheets.")
+    parser.add_argument("--model_path", type=str, required=True, help="Hugging Face model path or ID.")
+    parser.add_argument("--dataset_path", type=str, required=True, help="Path or name of the HF dataset.")
+    parser.add_argument("--split", type=str, default="val", help="Dataset split to use.")
+    parser.add_argument("--text_column", type=str, default="output", help="Column name containing text.")
+    parser.add_argument("--max_length", type=int, default=512, help="Max sequence length.")
+    parser.add_argument("--output_csv", type=str, default="perplexity_results.csv", help="Output CSV file.")
+    args = parser.parse_args()
+    
+    compute_perplexity_and_update_sheet(args)
 
 if __name__ == "__main__":
     main()

@@ -17,7 +17,6 @@ import random
 from torch.optim import AdamW
 from transformers import get_scheduler
 from tqdm import tqdm
-from datasets import interleave_datasets
 
 def set_seed(seed):
     torch.manual_seed(seed)
@@ -40,55 +39,10 @@ def tokenize_and_count(batch, tokenizer, max_length, append_eos=True, column_nam
         texts,
         truncation=True,
         max_length=max_length,
-        padding='max_length'
+        padding=False
     )
     out['num_tokens'] = [len(ids) for ids in out['input_ids']]
     return out
-
-def tokenize_c(batch, tokenizer, max_length):
-    def format_conversations(conversations, system_prompts, eos_token):
-        return [
-            f"<|system|>\n{system_prompt}\n<|user|>\n{turn['question']}\n{turn['answer']}\n{eos_token}"
-            for turns, system_prompt in zip(conversations, system_prompts)
-            for turn in turns
-        ]
-
-    cqa, csqa, context_texts = batch['cqa'], batch['csqa'], batch['output']
-    
-    formatted_cqa = format_conversations(cqa, context_texts, tokenizer.eos_token)
-    formatted_csqa = format_conversations(csqa, context_texts, tokenizer.eos_token)
-    texts = formatted_cqa + formatted_csqa
-    out = tokenizer(
-        texts,
-        truncation=True,
-        max_length=max_length,
-        padding='max_length',
-        return_length=True
-    )
-    out['num_tokens'] = out['length']
-    return out
-
-def tokenize_ir(batch, tokenizer, max_length):
-    def format_conversations(instruct, resp, eos_token):
-        return [
-            f"<|system|>\n\n<|user|>\n{ins}\n{r}\n{eos_token}"
-            for ins, r in zip(instruct, resp)
-        ]
-
-    instructions = batch['instruction']
-    responses = batch['response']
-    
-    texts = format_conversations(instructions, responses, tokenizer.eos_token)
-    out = tokenizer(
-        texts,
-        truncation=True,
-        max_length=max_length,
-        padding='max_length',
-        return_length=True
-    )
-    out['num_tokens'] = out['length']
-    return out
-    
 
 def context_pack(ds, tokenizer, max_length):
     all_input_ids = np.concatenate([ex['input_ids'] for ex in ds]).astype(np.int32)
@@ -115,7 +69,6 @@ def pad_dataset(ds, tokenizer, max_length):
             padding='max_length',
             max_length=max_length
         )
-    print("Padding dataset to max length:", max_length)
     ds = ds.map(pad_fn, batched=True, num_proc=os.cpu_count(), desc="Padding dataset")
     return ds
 
@@ -150,7 +103,7 @@ def main():
     run_dir         = config.get('run_dir')
     seed            = config.get('seed', 42)
     # Data related parameters
-    datasets        = config['data'].get('datasets', [])
+    dataset_name    = config['data']['dataset_name']
     split           = config['data'].get('split', 'train')
     streaming       = config['data'].get('streaming', False)
     max_length      = config['data'].get('max_length', 2048)
@@ -194,64 +147,65 @@ def main():
     set_seed(seed)
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
-    added_tokens = tokenizer.add_tokens(['<|pad|>', '<|system|>', '<|user|>', '<|assistant|>'], special_tokens=True)
+    added_tokens = tokenizer.add_tokens(['<|pad|>'], special_tokens=True)
+    # if tokenizer.pad_token is None:
+    #     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.pad_token = '<|pad|>'
 
     if processed_path:
         print(f"Loading preprocessed dataset from {processed_path}")
         ds = load_from_disk(processed_path)
-        total_tokens = sum(ds['num_tokens']) if 'num_tokens' in ds.features else sum(len(ids) for ids in ds['input_ids'])
+        total_tokens = sum(len(ids) for ids in tqdm(ds['input_ids']))
     else:
-        dataset_loaded = [
-            load_dataset(name, split=split, streaming=True)
-            for name in datasets
-        ]
+        ds = load_dataset(dataset_name, split=split, streaming=streaming)
+
+        print(f"Dataset loaded: {len(ds)} examples")
+
+        ds = ds.map(
+            lambda batch: tokenize_and_count(batch, tokenizer, max_length, append_eos, column_name),
+            batched=True,
+            remove_columns=ds.column_names,
+            num_proc=os.cpu_count(),
+            desc="Tokenizing dataset"
+        )
         
-        if streaming:
-            if len(dataset_loaded) == 1:
-                combined = dataset_loaded[0]
-            else:
-
-                combined = interleave_datasets(
-                    dataset_loaded,  # pass the full list of IterableDataset objects
-                    stopping_strategy="all_exhausted",
-                    # buffer_size=10000,
-                    seed=seed,
-                )
-
-            ds = combined.map(
-                lambda batch: tokenize_and_count(batch, tokenizer, max_length, append_eos, column_name),
-                batched=True,
-                remove_columns=ds.column_names,
-            )
-            ds = ds.shuffle(seed=seed)
+        total_tokens = sum(ds['num_tokens']) if 'num_tokens' in ds.features else sum(len(ids) for ids in ds['input_ids'])
+        if 'num_tokens' in ds.features:
+            ds = ds.remove_columns(['num_tokens'])
+            
+        if context_packing:
+            if streaming:
+                raise ValueError("Context packing with streaming datasets is unsupported.")
+            ds = context_pack(ds, tokenizer, max_length)
         else:
-            ds = ds.map(
-                lambda batch: tokenize_and_count(batch, tokenizer, max_length, append_eos, column_name),
-                batched=True,
-                remove_columns=ds.column_names,
-                num_proc=os.cpu_count(),
-                desc="Tokenizing dataset"
-            )
-            ds = ds.shuffle(seed=seed)
-            total_tokens = sum(ds['num_tokens']) if 'num_tokens' in ds.features else sum(len(ids) for ids in ds['input_ids'])
-            ds.save_to_disk(os.path.join(run_dir, "tokenized_datasets", run_name))
+            ds = pad_dataset(ds, tokenizer, max_length)
 
-            # Print dataset statistics
-            print(f"Dataset statistics:")
-            print(f"  - Number of examples: {len(ds)}")
-            print(f"  - Total tokens: {total_tokens}")
-            print(f"  - Average tokens per example: {total_tokens / len(ds):.1f}")
-            print(f"  - Max sequence length: {max_length}")
+        ds.save_to_disk(os.path.join(run_dir, "tokenized_datasets", run_name))
+
+    # Print dataset statistics
+    print(f"Dataset statistics:")
+    print(f"  - Number of examples: {len(ds)}")
+    # print(f"  - Total tokens: {total_tokens:,}")
+    # print(f"  - Average tokens per example: {total_tokens / len(ds):.1f}")
+    print(f"  - Max sequence length: {max_length}")
+    
+    # Verify if the data is tokenized correctly
+    if 'input_ids' not in ds.features:
+        raise ValueError("Dataset does not contain 'input_ids'. Ensure the dataset is tokenized correctly.")
+    if 'attention_mask' not in ds.features:
+        raise ValueError("Dataset does not contain 'attention_mask'. Ensure the dataset is padded correctly.")
+    if len(ds) == 0:
+        raise ValueError("Dataset is empty. Check the tokenization and padding steps.")
+    if len(ds[0]['input_ids']) != max_length:
+        raise ValueError(f"Input IDs length mismatch: expected {max_length}, got {len(ds[0]['input_ids'])}")
+    if len(ds[0]['attention_mask']) != max_length:
+        raise ValueError(f"Attention mask length mismatch: expected {max_length}, got {len(ds[0]['attention_mask'])}")
     
     #print dataset example
     print(f"Example from dataset: {ds[0]}")
     
     num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
-    if streaming:
-        dataset_size = len(ds)
-    else:
-        dataset_size = 2988778
+    dataset_size = len(ds)
     steps_per_epoch = dataset_size // (batch_size * gas * num_gpus)
     num_training_steps = steps_per_epoch * epochs
     
@@ -326,8 +280,7 @@ def main():
         max_grad_norm=max_grad_norm,
         dataloader_drop_last=dataloader_drop_last,
         save_strategy=save_strategy,
-        logging_strategy=logging_strategy,
-        max_steps=num_training_steps,
+        logging_strategy=logging_strategy
     )
     
     trainer = Trainer(
