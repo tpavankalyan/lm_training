@@ -1,4 +1,4 @@
-'''python batched_inference.py --model_path Pavankalyan/tinystories_ncp_2 --dataset_name Pavankalyan/TinyStories_eval --dataset_split validation --column_name prompt --batch_size 3000'''
+'''python batched_inference.py --model_path Pavankalyan/checkpoint-13281 --data_type instruct --split_type val --stage 0'''
 import argparse
 import os
 import torch
@@ -18,9 +18,10 @@ def run_inference(args):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
+    
+    dataset_name = f"Pavankalyan/stage{args.stage}_{args.data_type}_eval"
 
-    print(f"Loading dataset '{args.dataset_name}' (split: {args.dataset_split})...")
-    dataset = load_dataset(args.dataset_name, split=args.dataset_split)
+    dataset = load_dataset(dataset_name, split=args.split_type)
 
     def generate_in_batch(batch):
         prompts = batch[args.column_name]
@@ -49,7 +50,7 @@ def run_inference(args):
         generated_new_tokens = []
         for i in range(outputs.shape[0]):
             full_text = tokenizer.decode(outputs[i], skip_special_tokens=True)
-            prompt_text = prompts[i]
+            prompt_text = tokenizer.decode(inputs['input_ids'][i], skip_special_tokens=True)
             if full_text.startswith(prompt_text):
                 new_text = full_text[len(prompt_text):].strip()
             else:
@@ -68,18 +69,19 @@ def run_inference(args):
         desc=f"Generating text with {args.model_path}"
     )
 
-    print(f"Pushing dataset to Hub repository '{args.dataset_name}'...")
-    updated_dataset.push_to_hub(args.dataset_name)
+    print(f"Pushing dataset to Hub repository '{dataset_name}'...")
+    updated_dataset.push_to_hub(f"{dataset_name}_results")
     print("Inference complete and dataset pushed to the Hub successfully!")
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Run batch inference on a Hugging Face dataset and push results to the Hub.")
-    parser.add_argument('--model_path', type=str, required=True, help='Path to the Hugging Face model (local or on Hub).')
-    parser.add_argument('--dataset_name', type=str, required=True, help='Name of the dataset on the Hugging Face Hub.')
-    parser.add_argument('--dataset_split', type=str, required=True, help="Dataset split to use (e.g., 'train', 'test').")
-    parser.add_argument('--column_name', type=str, required=True, help='Name of the column in the dataset that contains the prompts.')
-    parser.add_argument('--batch_size', type=int, default=8, help='Batch size for inference.')
+    parser.add_argument("--model_path", type=str, required=True, help="Name for the model column in Sheets.")
+    parser.add_argument("--data_type", type=str, required=True, choices=["instruct", "cqa", "csqa"], help="Path or name of the HF dataset.")
+    parser.add_argument("--split_type", type=str, default="val", choices=["val", "test"], help="Dataset split to use.")
+    parser.add_argument("--stage", type=int, required=True, help="Stage number for the results.")
+    parser.add_argument('--column_name', type=str, default="prompt", help='Name of the column in the dataset that contains the prompts.')
+    parser.add_argument('--batch_size', type=int, default=1024, help='Batch size for inference.')
     parser.add_argument('--max_new_tokens', type=int, default=128, help='Maximum number of new tokens to generate.')
     args = parser.parse_args()
     run_inference(args)
