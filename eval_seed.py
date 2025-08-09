@@ -1,6 +1,7 @@
 from datasets import Dataset, load_dataset
 import pickle
 import argparse
+import os
 
 def prepare_seed_csqa(stage, split_type, model_name, root_dir):
     ds = load_dataset(f"Pavankalyan/stage{stage}_{data_type}_eval_results", split=split_type)
@@ -67,6 +68,9 @@ if __name__ == '__main__':
     model_name = args.model_path.split("/")[-1].replace('/', '_').replace('-', '_')
     split_type = args.split_type
     data_type = args.data_type
+
+    checkpoint_dir = f"{root_dir}/stage{stage}/{data_type}/{split_type}"
+    os.makedirs(checkpoint_dir, exist_ok=True)
     
     print(f"Preparing seed for {data_type}...")
     if data_type == "instruct":
